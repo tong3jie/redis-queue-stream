@@ -8,10 +8,20 @@ class redisQueue extends redis {
   constructor(config, options) {
     super(config);
     this.streams = {};
-    // this.streamName = options && options.streamName ? options.streamName : 'Stream'; // 队列名字
     this.groupName = options && options.groupName ? options.groupName : 'Queue'; // 消费组名
     this.consumerName = `${os.hostname()}:${process.pid}`; // 消费者名字
+    this.idleTime = options && options.idleTime ? options.idleTime : undefined; // 设置队列转移时间，超过该时间则进行重新入队
+    this.pendingCount = options && options.pendingCount ? options.pendingCount : undefined; // 设置队列转移次数上限,超过该次数将进行丢弃
     this.pendingTime = options && options.pendingTime ? options.pendingTime : undefined; // 每15分钟扫描一次，进行消费者转移
+    const processEvent = new events.EventEmitter();
+    processEvent.on('start', async () => {
+      await this.Client.multi()
+        .setex(`Consumer:${this.consumerName}`, 60, new Date().getTime())
+        .exec();
+      await sleep(56 * 1000);
+      processEvent.emit('start');
+    });
+    processEvent.emit('start');
   }
 
   /**
@@ -21,18 +31,15 @@ class redisQueue extends redis {
   async init({ streamName }) {
     const { Client } = this;
     try {
-      this.consumerName = `${os.hostname()}:${process.pid}`;
       const key = await Client.exists(streamName);
       if (!key) {
         await Client.xgroup('create', streamName, this.groupName, 0, 'mkstream');
       }
       this.streams[streamName] = true;
-      if (this.pendingTime) {
-        console.log('object');
-      }
-      this.pendingTime && this.checkPending(streamName);
+
+      this.pendingTime && this.checkPending();
     } catch (error) {
-      this.pendingTime && this.checkPending(streamName);
+      this.pendingTime && this.checkPending();
       return;
     }
   }
@@ -41,29 +48,49 @@ class redisQueue extends redis {
    * 定期进行pending消息的转移
    * @param {string} streamName  流名称
    */
-  async checkPending(streamName) {
+  async checkPending() {
     const { Client } = this;
     const checkPendingWork = new events.EventEmitter();
     checkPendingWork.on('pending', async () => {
       try {
-        await Client.pipeline()
-          .hset('Consumer', this.consumerName, new Date().getTime())
-          .pexpire('Consumer', this.pendingTime)
-          .exec();
-        const pendingInfos = await this.pending(streamName);
-        if (pendingInfos[3]) {
-          for (const [ consumer, count ] of pendingInfos[3]) {
-            const conPendingInfo = await Client.xpending(streamName, this.groupName, '-', '+', count, consumer);
-            console.log('conPendingInfo', process.pid, conPendingInfo);
-            for (const [ peindId ] of conPendingInfo) {
-              await Client.xclaim(streamName, this.groupName, this.consumerName, this.pendingTime, peindId);
+        const streams = Object.keys(this.streams);
+        const consumers = [];
+        let scanIndex = 0;
+        do {
+          // eslint-disable-next-line no-bitwise
+          const consumer = await Client.scan(~~scanIndex, 'match', 'Consumer:*', 'count', os.cpus().length * 2);
+          scanIndex = consumer[0];
+          consumers.push(...consumer[1]);
+        } while (scanIndex !== '0');
+
+        for (const streamName of streams) {
+          const pendingInfos = await this.pending(streamName);
+          if (pendingInfos[3]) {
+            for (const [ consumer, count ] of pendingInfos[3]) {
+              let time = 0;
+              while (time < count) {
+                const conPendingInfo = await Client.xpending(streamName, this.groupName, '-', '+', 10, consumer);
+                for (const [ pendindId, , idleTime, pendingCount ] of conPendingInfo) {
+                  if (!consumers.includes(`Consumer:${consumer}`)) {
+                    await Client.xclaim(streamName, this.groupName, this.consumerName, idleTime - 1000, pendindId);
+                  } else if (this.idleTime && idleTime > this.idleTime) {
+                    await Client.xclaim(streamName, this.groupName, this.consumerName, this.idleTime, pendindId);
+                    const messageInfo = await this.readById(streamName, pendindId);
+                    this.pub(streamName, messageInfo);
+                  } else if (this.pendingCount && this.pendingCount > pendingCount) {
+                    this.xack({ streamName, messageId: pendindId });
+                  }
+                }
+                time = time + 10;
+              }
             }
           }
         }
         await sleep(this.pendingTime - 1000);
-        console.log('xpending');
         checkPendingWork.emit('pending');
       } catch (error) {
+        console.log(error);
+        console.error(` checkPending error : ${error.stack}`);
         checkPendingWork.emit('pending');
       }
     });
@@ -78,7 +105,6 @@ class redisQueue extends redis {
     const { Client } = this;
     try {
       const pendingInfo = await Client.xpending(streamName, this.groupName);
-      console.log('pendingInfo', streamName, pendingInfo);
       return pendingInfo;
     } catch (error) {
       console.error(`${streamName} pending error : ${error.stack}`);
@@ -119,21 +145,15 @@ class redisQueue extends redis {
 
       const subInfo = await Client.xreadgroup('group', this.groupName, this.consumerName, 'count', count || 1, 'streams', streamName, '>');
       if (!subInfo) return null;
-
-      const subRes = {};
-      subRes.streamName = subInfo[0][0];
-
-      const streamInfo = [];
-
+      let streamInfo = [];
       for (const [ key, value ] of subInfo[0][1]) {
         streamInfo.push({
           streamId: key,
           streamV: new Map(Arraychunk(value, 2)),
         });
       }
-
-      subRes.streamInfo = streamInfo.length === 0 ? streamInfo[0] : streamInfo;
-      return subRes;
+      streamInfo = streamInfo.length === 1 ? streamInfo[0] : streamInfo;
+      return { streamName, streamInfo };
     } catch (error) {
       console.error(`${streamName} sub error : ${error.stack}`);
     }
@@ -162,7 +182,11 @@ class redisQueue extends redis {
     const { Client } = this;
     try {
       const streamInfo = await Client.xrange(streamName, messageId, messageId);
-      return streamInfo.length > 0 ? streamInfo[0][1][1] : null;
+      const messageInfo = {};
+      if (streamInfo.length > 0) {
+        messageInfo[streamInfo[0][1][0]] = streamInfo[0][1][1];
+      }
+      return messageInfo;
     } catch (error) {
       console.error(`${streamName} readById error : ${error.stack}`);
     }
