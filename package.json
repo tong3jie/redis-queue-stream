@@ -1,6 +1,6 @@
 {
   "name": "redis-queue-stream",
-  "version": "0.1.0",
+  "version": "0.3.5",
   "description": "a message queue by redis streams",
   "main": "index.js",
   "scripts": {
@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "init"
+    "url": "git@github.com:tong3jie/redis-queue-stream.git"
   },
   "keywords": [
     "redis",
@@ -16,19 +16,21 @@
     "streams"
   ],
   "author": "juju",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "ioredis": "^4.6.2",
     "lodash.chunk": "^4.2.0",
-    "lodash.flattendeep": "^4.4.0",
     "mz-modules": "^2.1.0"
   },
   "devDependencies": {
     "babel-preset-env": "^1.7.0",
     "babel-preset-stage-0": "^6.24.1",
-    "eslint-config-prettier": "^4.1.0",
     "eslint": "^5.15.1",
     "eslint-config-egg": "^7.1.0",
+    "eslint-config-prettier": "^4.1.0",
     "eslint-plugin-prettier": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=8"
   }
 }
