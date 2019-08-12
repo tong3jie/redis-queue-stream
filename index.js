@@ -1,23 +1,22 @@
-const redis = require('./lib/redis');
+const RedisQueues = require('./lib/redis');
 const assert = require('assert');
 const Arraychunk = require('lodash.chunk');
 const events = require('events');
 const sleep = require('mz-modules/sleep');
 const os = require('os');
-class redisQueue extends redis {
+class RedisQueue extends RedisQueues {
   constructor(config, options) {
     super(config);
     this.streams = {};
+    this.maxlen = options.maxlen || 10000000;
     this.groupName = options && options.groupName ? options.groupName : 'Queue'; // 消费组名
     this.consumerName = `${os.hostname()}:${process.pid}`; // 消费者名字
-    this.idleTime = options && options.idleTime ? options.idleTime : undefined; // 设置队列转移时间，超过该时间则进行重新入队
-    this.pendingCount = options && options.pendingCount ? options.pendingCount : undefined; // 设置队列转移次数上限,超过该次数将进行丢弃
-    this.pendingTime = options && options.pendingTime ? options.pendingTime : undefined; // 每15分钟扫描一次，进行消费者转移
+    this.idleTime = options && options.idleTime ? options.idleTime : 0; // 设置队列转移时间，超过该时间则进行重新入队
+    this.pendingCount = options && options.pendingCount ? options.pendingCount : 0; // 设置队列转移次数上限,超过该次数将进行丢弃
+    this.pendingTime = options && options.pendingTime ? options.pendingTime : 0; // 每15分钟扫描一次，进行消费者转移
     const processEvent = new events.EventEmitter();
     processEvent.on('start', async () => {
-      await this.Client.multi()
-        .setex(`Consumer:${this.consumerName}`, 60, new Date().getTime())
-        .exec();
+      await this.Client.setex(`Consumer:${this.consumerName}`, 60, new Date().getTime());
       await sleep(56 * 1000);
       processEvent.emit('start');
     });
@@ -28,28 +27,27 @@ class redisQueue extends redis {
    * 初始化并创建消费组
    * @param {string} streamName 消费组名
    */
-  async init({ streamName }) {
+  async streamInit(streamName) {
     const { Client } = this;
     try {
       const key = await Client.exists(streamName);
-      if (!key) {
+      // 判断redis中是否已经创建该stream
+      if (key === 0) {
         await Client.xgroup('create', streamName, this.groupName, 0, 'mkstream');
       }
       this.streams[streamName] = true;
-
-      this.pendingTime && this.checkPending();
+      this.checkPending();
     } catch (error) {
-      this.pendingTime && this.checkPending();
+      this.checkPending();
+      console.log('init:', error);
       return;
     }
   }
 
   /**
    * 定期进行pending消息的转移
-   * @param {string} streamName  流名称
    */
   async checkPending() {
-    const { Client } = this;
     const checkPendingWork = new events.EventEmitter();
     checkPendingWork.on('pending', async () => {
       try {
@@ -57,11 +55,10 @@ class redisQueue extends redis {
         const consumers = [];
         let scanIndex = 0;
         do {
-          // eslint-disable-next-line no-bitwise
-          const consumer = await Client.scan(~~scanIndex, 'match', 'Consumer:*', 'count', os.cpus().length * 2);
-          scanIndex = consumer[0];
+          const consumer = await this.Client.scan(scanIndex, 'match', 'Consumer:*', 'count', os.cpus().length * 2);
+          scanIndex = parseInt(consumer[0]);
           consumers.push(...consumer[1]);
-        } while (scanIndex !== '0');
+        } while (scanIndex !== 0);
 
         for (const streamName of streams) {
           const pendingInfos = await this.pending(streamName);
@@ -69,15 +66,15 @@ class redisQueue extends redis {
             for (const [ consumer, count ] of pendingInfos[3]) {
               let time = 0;
               while (time < count) {
-                const conPendingInfo = await Client.xpending(streamName, this.groupName, '-', '+', 10, consumer);
+                const conPendingInfo = await this.Client.xpending(streamName, this.groupName, '-', '+', 10, consumer);
                 for (const [ pendindId, , idleTime, pendingCount ] of conPendingInfo) {
                   if (!consumers.includes(`Consumer:${consumer}`)) {
-                    await Client.xclaim(streamName, this.groupName, this.consumerName, idleTime - 1000, pendindId);
+                    await this.Client.xclaim(streamName, this.groupName, this.consumerName, idleTime - 1000, pendindId);
                   } else if (this.idleTime && idleTime > this.idleTime) {
-                    await Client.xclaim(streamName, this.groupName, this.consumerName, this.idleTime, pendindId);
+                    await this.Client.xclaim(streamName, this.groupName, this.consumerName, this.idleTime, pendindId);
                     const messageInfo = await this.readById(streamName, pendindId);
                     this.pub(streamName, messageInfo);
-                  } else if (this.pendingCount && this.pendingCount > pendingCount) {
+                  } else if (this.pendingCount && this.pendingCount < pendingCount) {
                     this.xack({ streamName, messageId: pendindId });
                   }
                 }
@@ -89,8 +86,8 @@ class redisQueue extends redis {
         await sleep(this.pendingTime - 1000);
         checkPendingWork.emit('pending');
       } catch (error) {
-        console.log(error);
         console.error(` checkPending error : ${error.stack}`);
+        await sleep(this.pendingTime - 1000);
         checkPendingWork.emit('pending');
       }
     });
@@ -121,10 +118,10 @@ class redisQueue extends redis {
     assert(Object.prototype.toString.call(message) === '[object Object]', 'the type of message  must be object');
     assert(Object.keys(message).length > 0, 'message is require');
     try {
-      const streamId = await Client.xadd(streamName, '*', message);
       if (!this.streams[streamName]) {
-        this.init({ streamName });
+        await this.streamInit(streamName);
       }
+      const streamId = await Client.xadd(streamName, 'maxlen', this.maxlen, '*', message);
       return streamId;
     } catch (error) {
       console.error(`${streamName} pub error : ${error.stack}`);
@@ -133,18 +130,18 @@ class redisQueue extends redis {
 
   /**
    * 获取消息内容
-   * @param {number} count 获取数量，默认为1
-   * @param {string} streamName 流名称
+   * @param {streamName,count} streamName为操作的stranm名称，  count为获取的数量
    */
-  async sub({ count = 1, streamName }) {
+  async sub({ streamName, count = 1 }) {
     const { Client } = this;
     try {
       if (!this.streams[streamName]) {
-        this.init({ streamName });
+        this.streamInit(streamName);
       }
-
-      const subInfo = await Client.xreadgroup('group', this.groupName, this.consumerName, 'count', count || 1, 'streams', streamName, '>');
-      if (!subInfo) return null;
+      const subInfo = await Client.xreadgroup('group', this.groupName, this.consumerName, 'count', count, 'streams', streamName, '>');
+      if (!subInfo) {
+        return null;
+      }
       let streamInfo = [];
       for (const [ key, value ] of subInfo[0][1]) {
         streamInfo.push({
@@ -161,13 +158,14 @@ class redisQueue extends redis {
 
   /**
    * 消息确认
-   * @param {string} streamName  流名称
-   * @param {string} messageId  消息ID
+   * @param {streamName，messageId} streamName  流名称，messageId  消息ID
    */
   async xack({ streamName, messageId }) {
     const { Client } = this;
     try {
-      await Client.xack(streamName, this.groupName, messageId);
+      await Client.multi()
+        .xack(streamName, this.groupName, messageId)
+        .xdel(streamName, messageId);
     } catch (error) {
       console.error(`${streamName} xack error : ${error.stack}`);
     }
@@ -193,4 +191,4 @@ class redisQueue extends redis {
   }
 }
 
-module.exports = redisQueue;
+module.exports = RedisQueue;
