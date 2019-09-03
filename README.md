@@ -52,6 +52,7 @@ redisEvent.emit('pull');
   pendingCount: number, // retry times,default 2 times
 },
 
+```
 ## Configuration
 
 **Single Client**
