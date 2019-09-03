@@ -33,7 +33,7 @@ export class RedisQueue extends RedisQueues {
 
     this.groupName = options.groupName || 'Queue'; // 消费组名
 
-    this.expiryTime = options.expiryTime || 1000 * 60 * 1; // 设置队列转移时间，超过该时间则进行重新入队
+    this.expiryTime = options.expiryTime || 1000 * 60 * 15; // 设置队列转移时间，超过该时间则进行重新入队
 
     this.consumerName = `${os.hostname()}:${process.pid}`; // 消费者名字
 
@@ -309,7 +309,6 @@ export interface Config {
 }
 
 export interface Options {
-  Priority: number /* 队列总体等级 */;
   queueNames: string[];
   maxlen?: number;
   groupName?: string;

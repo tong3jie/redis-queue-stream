@@ -23,7 +23,7 @@ class RedisQueue extends redis_1.RedisQueues {
         this.queueNames = new Set(options.queueNames);
         this.maxlen = options.maxlen || 10000000;
         this.groupName = options.groupName || 'Queue'; // 消费组名
-        this.expiryTime = options.expiryTime || 1000 * 60 * 1; // 设置队列转移时间，超过该时间则进行重新入队
+        this.expiryTime = options.expiryTime || 1000 * 60 * 15; // 设置队列转移时间，超过该时间则进行重新入队
         this.consumerName = `${os.hostname()}:${process.pid}`; // 消费者名字
         this.pendingCount = options.pendingCount || 2; // 设置队列转移次数上限,超过该次数将进行丢弃
         const processEvent = new events.EventEmitter();
