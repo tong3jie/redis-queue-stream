@@ -1,7 +1,24 @@
 {
-  "extends": "eslint-config-egg",
-  "parserOptions": {
-    "ecmaVersion": 2017,
-    "sourceType": "module"
+  "extends": ["airbnb-base", "plugin:@typescript-eslint/recommended"],
+  "parser": "@typescript-eslint/parser",
+  "plugins": ["@typescript-eslint"],
+  "rules": {
+    "no-console": "off",
+    "@typescript-eslint/indent": ["error", 2],
+    "@typescript-eslint/no-explicit-any": 0,
+    "@typescript-eslint/explicit-member-accessibility": 0,
+    "@typescript-eslint/explicit-function-return-type": 0,
+    "import/no-unresolved": "off",
+    "no-restricted-syntax": "off",
+    "no-await-in-loop": "off",
+    "no-plusplus": "off",
+    "max-len": ["error", { "code": 150 }],
+    "func-names": "off",
+    "@typescript-eslint/no-var-requires": 0,
+    "import/prefer-default-export": 0,
+    "no-continue": "off",
+    "prefer-rest-params": "off",
+    "array-callback-return": "off",
+    "consistent-return": "off"
   }
 }

@@ -7,7 +7,7 @@
     "built/"
   ],
   "scripts": {
-    "test": "npm run test"
+    "build": "rm -rf built && tsc"
   },
   "repository": {
     "type": "git",
@@ -16,7 +16,12 @@
   "keywords": [
     "redis",
     "queue",
-    "streams"
+    "mq",
+    "kafka",
+    "nodejs",
+    "pub",
+    "sub",
+    "job"
   ],
   "author": "juju",
   "license": "MIT",
@@ -26,8 +31,15 @@
     "mz-modules": "^2.1.0"
   },
   "devDependencies": {
+    "@types/ioredis": "4.0.14",
+    "@types/mocha": "^5.2.7",
+    "@types/node": "^12.7.1",
+    "@typescript-eslint/eslint-plugin": "^1.13.0",
+    "@typescript-eslint/parser": "^1.13.0",
     "eslint": "^6.1.0",
-    "eslint-config-egg": "^7.4.0"
+    "eslint-config-airbnb-base": "^14.0.0",
+    "eslint-plugin-import": "^2.18.2",
+    "typescript": "^3.5.3"
   },
   "engines": {
     "node": ">=8"

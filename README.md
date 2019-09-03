@@ -1,5 +1,5 @@
 a message queue by redis streams.
-Supports Redis >= 2.6.12 and (Node.js >= 8).
+Supports Redis >= 5.0.0 and (Node.js >= 8).
 
 # Quick Start
 
