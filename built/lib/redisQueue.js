@@ -17,8 +17,8 @@ const redis_1 = require("./redis");
 class RedisQueue extends redis_1.RedisQueues {
     constructor(config, options) {
         super(config);
-        this.consumers = [];
         this.streams = {};
+        this.consumers = [];
         assert(options && options.queueNames && options.queueNames.length > 0, 'queueNames must be an array');
         this.queueNames = new Set(options.queueNames);
         this.maxlen = options.maxlen || 10000000;
@@ -88,7 +88,6 @@ class RedisQueue extends redis_1.RedisQueues {
                         consumers.push(...consumer[1]);
                     } while (scanIndex !== 0);
                 }
-                console.warn(consumers);
                 this.consumers = consumers;
             }
             catch (error) {
@@ -242,18 +241,13 @@ class RedisQueue extends redis_1.RedisQueues {
             const { Client } = this;
             try {
                 const streamInfo = yield Client.xrange(queueName, messageId, messageId);
-                console.log('streamInfo---', streamInfo);
                 const messageInfo = {};
                 if (streamInfo.length > 0) {
-                    console.log('streamInfo', streamInfo);
                     const message = streamInfo[0][1];
-                    console.log('message', message);
                     for (let i = 0; i < message.length; i += 2) {
-                        console.log(message[i], message[i + 1]);
                         messageInfo[message[i]] = message[i + 1];
                     }
                 }
-                console.log('messageInfo----', messageInfo);
                 return messageInfo;
             }
             catch (error) {
@@ -276,13 +270,32 @@ class RedisQueue extends redis_1.RedisQueues {
                         const PendingInfo = yield this.Client.xpending(queueName, this.groupName, '-', '+', count, consumer);
                         for (const [pendindId, , idleTime] of PendingInfo) {
                             if (this.expiryTime && idleTime > this.expiryTime) {
-                                pendindIds.push(pendindId);
+                                pendindIds.push({ queueName, pendindId });
                             }
                         }
                     }
                 }
             }
             return pendindIds;
+        });
+    }
+    /**
+     * 将过期的消息重新发布，超过失败次数的则直接丢弃
+     * @param ids 过期的消息ID
+     */
+    RePub(ids, callBack) {
+        return __awaiter(this, void 0, void 0, function* () {
+            for (const id of ids) {
+                const [queueName, pendindId] = Object.values(id);
+                const messageInfo = yield this.ReadById(queueName, pendindId);
+                this.Xack(queueName, pendindId);
+                if (messageInfo.xcount < this.pendingCount) {
+                    this.Pub(queueName, Object.assign(messageInfo, { xcount: messageInfo.xcount + 1 || 1 }));
+                }
+                else {
+                    callBack();
+                }
+            }
         });
     }
 }
